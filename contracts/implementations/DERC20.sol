@@ -196,7 +196,8 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
         require(from != address(0), "ERC20: transfer from the zero address");
         require(to != address(0), "ERC20: transfer to the zero address");
 
-        _beforeTokenTransfer(from, to, amount);
+        // lazyWrite(_balancesWithDelta[from]);
+        // lazyWrite(_balancesWithDelta[to]);
 
         // it's okay to directly access storage variable since lazy eval has already been applied at lines above
         uint256 fromBalance = _balances[from];
@@ -206,15 +207,14 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
         );
 
         //TODO: create Delta and conditiondelta here
-        Structs.ConditionDelta memory foo;
-        Structs.ConditionDelta memory bar;
+        Structs.ConditionDelta memory fromConditionDelta;
+        Structs.ConditionDelta memory toConditionDelta;
 
-        // register conditionddelta using registerDelta
+        // register conditiondelta using registerDelta
+        _registerConditionDelta(_balancesWithDelta[from], fromConditionDelta);
+        _registerConditionDelta(_balancesWithDelta[to], toConditionDelta);
 
         //
-
-        _balancesWithDelta[from].push(foo); //apply delta here
-        _balancesWithDelta[to].push(bar); //apply delta here
 
         // TODO: emit ConditionDeltaRegistered();
 
@@ -374,34 +374,87 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
         // 붙어야 할 곳 찾아서, 해당 stateWithDelta에 register 시켜주기
     }
 
-    function lazyEvaluateCondition(
-        Structs.ConditionDelta[] calldata stateWithDelta
-    ) external view override {
+    function _lazyEvaluate(
+        bytes4 stateSelector,
+        bytes memory stateEncoded,
+        Structs.ConditionDelta[] storage stateWithDelta
+    ) private view returns (bytes memory lazyState) {
         // TODO: 상태 iterate해서 staticcall로 direct 실행, 시간, 또는 view function에 따라 값을 읽어오든 말든 하고
         // 실행할 delta들 순서 priority 맞춰서 delta 반영해서 써주기
+
+        if (stateSelector == 0x18160ddd) {
+            // _totalSupply
+            uint256 tempStateWithDelta = _totalSupply;
+
+            for (uint i = 0; i < stateWithDelta.length; i++) {
+                Structs.Condition storage condition = stateWithDelta[i]
+                    .condition;
+                Structs.Delta storage delta = stateWithDelta[i].delta;
+                // check and apply
+
+                (bool success, bytes memory canExecVal) = condition
+                    .conditionAddress
+                    .staticcall(
+                        abi.encodeWithSelector(
+                            condition.conditionSelector,
+                            condition.data
+                        )
+                    );
+                bool canExec = abi.decode(canExecVal, (bool));
+
+                if (success && canExec) {
+                    bytes memory concatArguments = abi.encode(
+                        stateWithDelta,
+                        delta.arguments
+                    );
+                    (bool success2, bytes memory retVal) = delta
+                        .deltaAddress
+                        .staticcall(
+                            abi.encodeWithSelector(
+                                delta.deltaSelector,
+                                concatArguments
+                            )
+                        );
+                    if (success2) {
+                        (tempStateWithDelta) = abi.decode(retVal, (uint256));
+                    }
+                }
+            }
+            lazyState = abi.encode(tempStateWithDelta);
+        }
+        //
+        else if (stateSelector == 0x27e235e3) {
+            // _balances
+            uint256 tempBalance = abi.decode(stateEncoded, (uint256));
+            uint256 tempStateWithDelta = tempBalance;
+        }
+        //
+        else if (stateSelector == 0xdd62ed3e) {
+            // _allowances
+            uint256 tempAllowance = abi.decode(stateEncoded, (uint256));
+            uint256 tempStateWithDelta = tempAllowance;
+        }
     }
 
-    function lazyWriteDelta(
-        Structs.ConditionDelta calldata
-    ) external override returns (bool) {
-        // targetAddress.call로 deltas만 모아서 부르기
-        // staticall로 delta 반영된 값 return 받아서
-        // state =
-    }
+    function lazyWrite(
+        bytes4 stateSelector,
+        bytes memory stateEncoded,
+        Structs.ConditionDelta[] storage stateWithDelta
+    ) internal returns (bool success) {
+        //
+        if (stateSelector == 0x18160ddd) {
+            // _totalSupply
+            (_totalSupply) = abi.decode(
+                _lazyEvaluate(stateSelector, stateEncoded, stateWithDelta),
+                (uint256)
+            );
 
-    function applyDelta(Structs.Delta[] memory deltas) external view {
-        // targetStateSelector에 따라 맞춰서, 해당하는 state variable에 delta 반영하기
-        /*
-         대충 
-         memory stateWithDelta = state;
-         for(){
-            bytes arguments = abi.encode ( stateWithDelta 와 arguments concatenate )
-            bytes calldata data = abi.encodeWithSelector(deltaSelector, arguments );
-            (success, retVal) = deltaAddress.staticcall(data);
-            stateWithDelta = retVal;
-         }
-         return stateWithDelta;
-        */
+            return true;
+        } else if (stateSelector == 0x27e235e3) {
+            // _balances
+        } else if (stateSelector == 0xdd62ed3e) {
+            // _allowances
+        }
     }
 
     function _beforeTokenTransfer(

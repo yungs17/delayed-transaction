@@ -37,12 +37,4 @@ interface IDeltaImpl {
         bytes memory arguments,
         Structs.ConditionDelta memory
     ) external;
-
-    function lazyEvaluateCondition(
-        Structs.ConditionDelta[] calldata
-    ) external view;
-
-    function lazyWriteDelta(
-        Structs.ConditionDelta calldata
-    ) external returns (bool);
 }
