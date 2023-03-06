@@ -1,14 +1,14 @@
 {
   "name": "delayed-transaction",
   "version": "1.0.0",
-  "description": "POC of delayed/scheduled smart contract execution using latency",
+  "description": "POC of delayed/scheduled smart contract execution using lazy",
   "main": "index.js",
   "scripts": {
     "eslint": "eslint **/*.{js,ts}",
     "eslint:fix": "eslint **/*.{js,ts} --fix",
     "prettier": "prettier **/*.{json,sol,md} --check",
     "prettier:fix": "prettier **/*.{json,sol,md} --write",
-    "solhint": "solhint projects/**/*.sol",
+    "solhint": "solhint **/*.sol",
     "clean": "npx hardhat clean",
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
@@ -59,6 +59,6 @@
   },
   "dependencies": {
     "@nomiclabs/hardhat-etherscan": "^3.1.2",
-    "@openzeppelin/contracts": "^4.8.0"
+    "@openzeppelin/contracts": "^4.8.1"
   }
 }
