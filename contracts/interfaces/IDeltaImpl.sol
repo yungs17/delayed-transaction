@@ -14,19 +14,6 @@ interface IDeltaImpl {
 
     function getAvailableReads() external view returns (bytes4[] memory);
 
-    function createDelta(
-        address targetAddress,
-        bytes4 targetStateSelector,
-        address deltaAddress,
-        bytes4 deltaSelector,
-        bytes memory dataWithoutState
-    ) external view returns (Structs.Delta memory);
-
-    function createConditionDelta(
-        Structs.Condition memory,
-        Structs.Delta memory
-    ) external pure returns (Structs.ConditionDelta memory);
-
     // use storage keyword
     function broadcastConditionDelta(
         Structs.ConditionDelta memory newConditionDelta

@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/utils/Context.sol";
 import "../libs/Structs.sol";
 import "../interfaces/IDeltaImpl.sol";
 import "./IDERC20.sol";
+import "../core/DeltaFactory.sol";
 
 contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
     // static storage variables
@@ -27,6 +28,9 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
     // mapping of read function selectors to storage variable selectors
     bytes4[] private _availableReads;
     mapping(bytes4 => bytes4[]) private _statesSelectors;
+
+    // conditiondelta id count
+    uint256 private count;
 
     // initialize mappings
     constructor(string memory name_, string memory symbol_) {
@@ -191,13 +195,32 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
         address from,
         address to,
         uint256 amount,
-        Structs.Condition memory condition
+        Structs.Condition memory newCondition
     ) internal virtual {
         require(from != address(0), "ERC20: transfer from the zero address");
         require(to != address(0), "ERC20: transfer to the zero address");
 
-        // lazyWrite(_balancesWithDelta[from]);
-        // lazyWrite(_balancesWithDelta[to]);
+        // lazywrite _balances
+        uint256 _balanceFrom = abi.decode(
+            _lazyEvaluate(
+                0x27e235e3,
+                abi.encode(_balancesWithDelta[from]),
+                _balancesWithDelta[from]
+            ),
+            (uint256)
+        );
+
+        uint256 _balanceTo = abi.decode(
+            _lazyEvaluate(
+                0x27e235e3,
+                abi.encode(_balancesWithDelta[to]),
+                _balancesWithDelta[to]
+            ),
+            (uint256)
+        );
+
+        _balances[from] = _balanceFrom;
+        _balances[to] = _balanceTo;
 
         // it's okay to directly access storage variable since lazy eval has already been applied at lines above
         uint256 fromBalance = _balances[from];
@@ -206,19 +229,38 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
             "ERC20: transfer amount exceeds balance"
         );
 
-        //TODO: create Delta and conditiondelta here
-        Structs.ConditionDelta memory fromConditionDelta;
-        Structs.ConditionDelta memory toConditionDelta;
+        //create delta and conditiondelta
+        Structs.Delta memory newDeltaFrom = this.createDelta(
+            address(this),
+            0x27e235e3,
+            address(DeltaFactory),
+            bytes4(keccak256("subUint(uint256,uint256)")),
+            abi.encode(amount)
+        );
 
-        // register conditiondelta using registerDelta
+        Structs.Delta memory newDeltaTo = this.createDelta(
+            address(this),
+            0x27e235e3,
+            address(DeltaFactory),
+            bytes4(keccak256("addUint(uint256,uint256)")),
+            abi.encode(amount)
+        );
+
+        Structs.ConditionDelta memory fromConditionDelta = this
+            .createConditionDelta(newCondition, newDeltaFrom);
+        Structs.ConditionDelta memory toConditionDelta = this
+            .createConditionDelta(newCondition, newDeltaTo);
+
+        // check condition and broadcast to read-needed states
+        this.broadcastConditionDelta(fromConditionDelta);
+
+        // register conditiondelta
         _registerConditionDelta(_balancesWithDelta[from], fromConditionDelta);
         _registerConditionDelta(_balancesWithDelta[to], toConditionDelta);
 
         //
 
         // TODO: emit ConditionDeltaRegistered();
-
-        _afterTokenTransfer(from, to, amount);
     }
 
     function _mint(address account, uint256 amount) internal virtual {
@@ -309,18 +351,28 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
     function createDelta(
         address targetAddress,
         bytes4 targetStateSelector,
+        bytes memory targetArguments,
         address deltaAddress,
         bytes4 deltaSelector,
-        bytes memory arguments
-    ) external view virtual override returns (Structs.Delta memory newDelta) {
+        bytes memory deltaArguments
+    ) external view virtual returns (Structs.Delta memory newDelta) {
+        Structs.TargetAddressFunction memory t1 = Structs.TargetAddressFunction(
+            targetAddress,
+            targetStateSelector,
+            targetArguments
+        );
+
+        Structs.TargetAddressFunction memory t2 = Structs.TargetAddressFunction(
+            deltaAddress,
+            deltaSelector,
+            deltaArguments
+        );
+
         newDelta = Structs.Delta({
             creator: _msgSender(),
             created: block.timestamp,
-            targetAddress: targetAddress,
-            targetStateSelector: targetStateSelector,
-            deltaAddress: deltaAddress,
-            deltaSelector: deltaSelector,
-            arguments: arguments,
+            target: t1,
+            delta: t2,
             resolved: false
         });
     }
@@ -328,9 +380,10 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
     function createConditionDelta(
         Structs.Condition memory condition,
         Structs.Delta memory delta
-    ) external pure returns (Structs.ConditionDelta memory conditionDelta) {
+    ) external returns (Structs.ConditionDelta memory conditionDelta) {
         // TODO: implement base id counter
-        conditionDelta = Structs.ConditionDelta(1, condition, delta);
+        conditionDelta = Structs.ConditionDelta(count, condition, delta);
+        count += 1;
     }
 
     function registerConditionDeltaExternally(
@@ -342,13 +395,17 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
 
         if (conditionSelector == IERC20.totalSupply.selector) {
             _registerConditionDelta(_totalSupplyWithDelta, newConditionDelta);
-        } else if (conditionSelector == IERC20.balanceOf.selector) {
+        }
+        //
+        else if (conditionSelector == IERC20.balanceOf.selector) {
             address account = abi.decode(arguments, (address));
             _registerConditionDelta(
                 _balancesWithDelta[account],
                 newConditionDelta
             );
-        } else if (conditionSelector == IERC20.allowance.selector) {
+        }
+        //
+        else if (conditionSelector == IERC20.allowance.selector) {
             (address owner, address spender) = abi.decode(
                 arguments,
                 (address, address)
@@ -364,13 +421,13 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
         Structs.ConditionDelta[] storage stateWithDelta,
         Structs.ConditionDelta memory newConditionDelta
     ) private {
+        // TODO: handle priority and other pre-processing
         stateWithDelta.push(newConditionDelta);
     }
 
     function broadcastConditionDelta(
         Structs.ConditionDelta memory newConditionDelta
     ) external view virtual override {
-        // TODO: handle priority and other pre-processing
         // 붙어야 할 곳 찾아서, 해당 stateWithDelta에 register 시켜주기
     }
 
@@ -381,6 +438,7 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
     ) private view returns (bytes memory lazyState) {
         // TODO: 상태 iterate해서 staticcall로 direct 실행, 시간, 또는 view function에 따라 값을 읽어오든 말든 하고
         // 실행할 delta들 순서 priority 맞춰서 delta 반영해서 써주기
+        // delta가 다른 곳일 수도 있음!
 
         if (stateSelector == 0x18160ddd) {
             // _totalSupply
@@ -405,13 +463,13 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
                 if (success && canExec) {
                     bytes memory concatArguments = abi.encode(
                         stateWithDelta,
-                        delta.arguments
+                        delta.delta.arguments
                     );
                     (bool success2, bytes memory retVal) = delta
                         .deltaAddress
                         .staticcall(
                             abi.encodeWithSelector(
-                                delta.deltaSelector,
+                                delta.delta.targetFunctionSelector,
                                 concatArguments
                             )
                         );
@@ -433,27 +491,6 @@ contract DERC20 is Context, IERC20Metadata, IDeltaImpl, IDERC20 {
             // _allowances
             uint256 tempAllowance = abi.decode(stateEncoded, (uint256));
             uint256 tempStateWithDelta = tempAllowance;
-        }
-    }
-
-    function lazyWrite(
-        bytes4 stateSelector,
-        bytes memory stateEncoded,
-        Structs.ConditionDelta[] storage stateWithDelta
-    ) internal returns (bool success) {
-        //
-        if (stateSelector == 0x18160ddd) {
-            // _totalSupply
-            (_totalSupply) = abi.decode(
-                _lazyEvaluate(stateSelector, stateEncoded, stateWithDelta),
-                (uint256)
-            );
-
-            return true;
-        } else if (stateSelector == 0x27e235e3) {
-            // _balances
-        } else if (stateSelector == 0xdd62ed3e) {
-            // _allowances
         }
     }
 
